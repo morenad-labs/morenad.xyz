@@ -1,0 +1,92 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+cache_path = "cache"
+
+# Solidity compiler settings
+solc_version = "0.8.30"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+via_ir = false
+
+# Enable FFI for scripts
+ffi = false
+fs_permissions = [{ access = "read-write", path = "./" }]
+
+# Verbosity
+verbosity = 2
+
+# Gas reporting
+gas_reports = ["*"]
+gas_reports_ignore = []
+
+# Coverage
+no_match_coverage = "test"
+
+# Formatter
+line_length = 100
+tab_width = 4
+bracket_spacing = true
+int_types = "long"
+multiline_func_header = "all"
+quote_style = "double"
+number_underscore = "thousands"
+override_spacing = true
+wrap_comments = true
+
+# Remappings
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
+    "forge-std/=lib/forge-std/src/",
+    "gelato-vrf/=lib/vrf-contracts/contracts/",
+]
+
+# RPC endpoints
+[rpc_endpoints]
+mainnet = "${MAINNET_RPC_URL}"
+sepolia = "${SEPOLIA_RPC_URL}"
+monad_testnet = "${MONAD_RPC_URL}"
+monad = "${MONAD_MAINNET_RPC_URL}"
+
+# Block explorer verification
+[etherscan]
+mainnet = { key = "${ETHERSCAN_API_KEY}" }
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+monad_testnet = { key = "${MONAD_EXPLORER_API_KEY}", url = "https://testnet.monadexplorer.com/api" }
+monad = { key = "${MONAD_EXPLORER_API_KEY}", url = "https://monadexplorer.com/api" }
+
+# Testing settings
+[fuzz]
+runs = 256
+max_test_rejects = 65536
+seed = "0x1234"
+dictionary_weight = 40
+include_storage = true
+include_push_bytes = true
+
+[invariant]
+runs = 256
+depth = 15
+fail_on_revert = false
+call_override = false
+dictionary_weight = 80
+include_storage = true
+include_push_bytes = true
+
+# CI profile - faster compilation, less optimization
+[profile.ci]
+optimizer_runs = 100
+fuzz = { runs = 128 }
+invariant = { runs = 128, depth = 10 }
+
+# Production profile - maximum optimization
+[profile.production]
+optimizer_runs = 1000000
+via_ir = true
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
