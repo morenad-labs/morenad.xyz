@@ -38,7 +38,7 @@ abstract contract MiningGameCheckpoint is MiningGameBase {
         bool isEmergency = round.state == RoundState.EMERGENCY_SKIP;
 
         // Must be RESOLVED or EMERGENCY_SKIP
-        if (!isEmergency && round.state != RoundState.RESOLVED) revert RoundNotActive();
+        if (!isEmergency && round.state != RoundState.RESOLVED) revert RoundNotResolved();
 
         UserRoundData storage userData = userRoundData[roundId][user];
 

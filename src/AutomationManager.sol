@@ -112,42 +112,6 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
         }
     }
 
-    /// @notice Update automation settings
-    /// @param amountPerBlock Amount to deploy per block (0 to keep current)
-    /// @param blockMask Bitmask for block selection
-    /// @param strategy Automation strategy type
-    /// @param autoReload Auto-reload winnings into balance
-    function updateAutomation(
-        uint128 amountPerBlock,
-        uint32 blockMask,
-        AutomationStrategy strategy,
-        bool autoReload
-    ) external nonReentrant {
-        Automation storage auto_ = automations[msg.sender];
-        if (!auto_.active) revert AutomationNotFound();
-
-        if (amountPerBlock > 0) {
-            auto_.amountPerBlock = amountPerBlock;
-        }
-
-        if (strategy == AutomationStrategy.PREFERRED && blockMask == 0) revert InvalidBlockMask();
-        if (blockMask > ((1 << GRID_SIZE) - 1)) revert InvalidBlockMask();
-
-        auto_.blockMask = blockMask;
-        auto_.strategy = strategy;
-        auto_.autoReload = autoReload;
-
-        emit AutomationUpdated(
-            msg.sender,
-            auto_.amountPerBlock,
-            blockMask,
-            strategy,
-            autoReload,
-            auto_.balance,
-            auto_.remainingRounds
-        );
-    }
-
     /// @notice Fund automation balance
     function fundAutomation() external payable nonReentrant {
         Automation storage auto_ = automations[msg.sender];
@@ -229,10 +193,17 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
     /// @notice Deploy on behalf of a user (only callable by sharedExecutor)
     function deployForUser(address user, uint8[] calldata blockIds) external nonReentrant {
         if (msg.sender != sharedExecutor) revert NotExecutor();
-        _executeAutomationDeploy(user, blockIds, msg.sender);
+        uint96 fee = _executeAutomationDeploy(user, blockIds);
+
+        // Pay executor fee after successful deploy
+        if (fee > 0) {
+            (bool success, ) = msg.sender.call{value: fee}("");
+            if (!success) revert TransferFailed();
+        }
     }
 
     /// @notice Batch deploy for multiple users
+    /// @dev Executor fee is accumulated and paid once at the end for successful deploys only
     function batchDeployForUsers(
         address[] calldata users,
         uint8[][] calldata blockIdsPerUser
@@ -240,18 +211,27 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
         if (msg.sender != sharedExecutor) revert NotExecutor();
         if (users.length != blockIdsPerUser.length) revert InvalidDeployAmount();
 
+        uint256 totalFees = 0;
+
         for (uint256 i = 0; i < users.length; i++) {
-            try this.deployForUserInternal(users[i], blockIdsPerUser[i]) {}
-            catch (bytes memory reason) {
+            try this.deployForUserInternal(users[i], blockIdsPerUser[i]) returns (uint96 fee) {
+                totalFees += fee;
+            } catch (bytes memory reason) {
                 emit BatchDeployFailed(users[i], reason);
             }
         }
+
+        // Pay accumulated executor fees for successful deploys only
+        if (totalFees > 0) {
+            (bool success, ) = msg.sender.call{value: totalFees}("");
+            if (!success) revert TransferFailed();
+        }
     }
 
-    /// @notice Internal deploy for batch calls
-    function deployForUserInternal(address user, uint8[] calldata blockIds) external {
+    /// @notice Internal deploy for batch calls (returns executor fee)
+    function deployForUserInternal(address user, uint8[] calldata blockIds) external returns (uint96) {
         require(msg.sender == address(this), "Only internal");
-        _executeAutomationDeploy(user, blockIds, sharedExecutor);
+        return _executeAutomationDeploy(user, blockIds);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -285,14 +265,13 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
 
     /// @dev Slither "arbitrary-send-eth" is a false positive:
     ///      - miningGame is a trusted contract set by owner
-    ///      - feeRecipient is sharedExecutor, set by owner via setSharedExecutor()
     ///      - user is verified via automations mapping (only automation owner's funds)
+    /// @return fee Executor fee to be paid by the caller after successful deploy
     // slither-disable-next-line arbitrary-send-eth
     function _executeAutomationDeploy(
         address user,
-        uint8[] calldata blockIds,
-        address feeRecipient
-    ) internal {
+        uint8[] calldata blockIds
+    ) internal returns (uint96) {
         Automation storage auto_ = automations[user];
         if (!auto_.active) revert AutomationNotActive();
         if (auto_.remainingRounds == 0) revert NoRoundsRemaining();
@@ -311,7 +290,8 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
         if (deployBlocks.length == 0) revert InvalidDeployAmount();
 
         uint128 deployAmount = auto_.amountPerBlock * uint128(deployBlocks.length);
-        uint128 totalCost = deployAmount + uint128(executorFee);
+        uint96 fee = executorFee;
+        uint128 totalCost = deployAmount + uint128(fee);
 
         // Check balance covers both deploy amount and executor fee
         if (auto_.balance < totalCost) revert InsufficientAutomationBalance();
@@ -327,13 +307,10 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
         // Call MiningGame to deploy
         miningGame.deployFromAutomation{value: deployAmount}(user, deployBlocks, auto_.amountPerBlock);
 
-        // Pay executor fee from balance
-        if (executorFee > 0) {
-            (bool success, ) = feeRecipient.call{value: executorFee}("");
-            if (!success) revert TransferFailed();
-        }
+        emit AutomationDeployed(roundId, user, sharedExecutor, deployBlocks, auto_.amountPerBlock, fee);
 
-        emit AutomationDeployed(roundId, user, feeRecipient, deployBlocks, auto_.amountPerBlock, executorFee);
+        // Return fee for caller to transfer (ensures fee is only paid on successful deploy)
+        return fee;
     }
 
     function _getDeployBlocks(

@@ -157,6 +157,9 @@ struct AutomationInfo {
 //////////////////////////////////////////////////////////////*/
 
 error RoundNotActive();
+error RoundNotPending();
+error RoundNotResolved();
+error NotCurrentRound();
 error RoundNotClosed();
 error RoundAlreadyResolved();
 error InvalidBlock();
@@ -171,6 +174,7 @@ error RoundExpired();
 error NoCommitment();
 error InvalidSeed();
 error CommitmentMismatch();
+error CommitmentAlreadyMade();
 error RoundNotReadyForReveal();
 error AdminCannotDeploy();
 error AutomationNotActive();
@@ -236,16 +240,6 @@ event AutomationCreated(
     bool autoReload,
     uint128 initialBalance,
     uint16 initialRounds
-);
-
-event AutomationUpdated(
-    address indexed authority,
-    uint128 amountPerBlock,
-    uint32 blockMask,
-    AutomationStrategy strategy,
-    bool autoReload,
-    uint128 currentBalance,
-    uint16 remainingRounds
 );
 
 event AutomationFunded(address indexed authority, uint128 amount, uint128 newBalance);

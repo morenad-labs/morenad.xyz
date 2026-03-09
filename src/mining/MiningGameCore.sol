@@ -18,6 +18,7 @@ abstract contract MiningGameCore is MiningGameBase {
     function commitToNextRound(bytes32 commitHash) external {
         if (msg.sender != admin) revert NotAdmin();
         if (commitHash == bytes32(0)) revert InvalidSeed();
+        if (nextRoundCommitment != bytes32(0)) revert CommitmentAlreadyMade();
 
         uint32 nextRound = currentRound + 1;
         nextRoundCommitment = commitHash;
@@ -34,7 +35,7 @@ abstract contract MiningGameCore is MiningGameBase {
         if (commitHash == bytes32(0)) revert InvalidSeed();
 
         Round storage round = rounds[roundId];
-        if (round.state != RoundState.PENDING) revert RoundNotActive();
+        if (round.state != RoundState.PENDING) revert RoundNotPending();
 
         round.commitHash = commitHash;
         round.startTime = uint40(block.timestamp); // Reset timer when round becomes ACTIVE

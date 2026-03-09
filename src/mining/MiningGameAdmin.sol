@@ -65,11 +65,11 @@ abstract contract MiningGameAdmin is MiningGameBase {
     /// @dev Only owner can call. Round must be ACTIVE or CLOSED.
     ///      After skipping, users can call checkpoint() to get full refund.
     function setEmergencySkip(uint32 roundId) external onlyOwner {
-        if (roundId != currentRound) revert RoundNotActive();
+        if (roundId != currentRound) revert NotCurrentRound();
 
         Round storage round = rounds[roundId];
         // Only allow ACTIVE or CLOSED (not PENDING, RESOLVED, or already EMERGENCY_SKIP)
-        if (round.state == RoundState.PENDING) revert RoundNotActive();
+        if (round.state == RoundState.PENDING) revert RoundNotPending();
         if (round.state == RoundState.RESOLVED) revert RoundAlreadyResolved();
         if (round.state == RoundState.EMERGENCY_SKIP) revert RoundAlreadyResolved();
 
