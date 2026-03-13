@@ -114,8 +114,8 @@ abstract contract MiningGameCore is MiningGameBase {
         if (!success) revert VaultDepositFailed();
     }
 
-    /// @notice Close current round and request VRF randomness
-    /// @dev Only admin can close rounds manually
+    /// @notice Close current round once its deployment window has expired
+    /// @dev Admin-only close is retained; close-time randomness remains a tracked accepted risk.
     function closeRound() external {
         if (msg.sender != admin) revert NotAdmin();
         Round storage round = rounds[currentRound];
@@ -200,6 +200,7 @@ abstract contract MiningGameCore is MiningGameBase {
 
         // Cache morelode values before state changes
         uint128 morelodeAmount = 0;
+        uint128 emittedMorelodeAmount = 0;
         uint128 cachedMorelodePool = morelodePool;
 
         // Trigger morelode if applicable (update state)
@@ -224,23 +225,13 @@ abstract contract MiningGameCore is MiningGameBase {
         // Store netPool for checkpoint calculation
         round.netPool = netPool;
 
-        // Add to morelode only if there are winners
         if (hasWinners) {
+            emittedMorelodeAmount = _mintRoundMore(roundId, morelodeAmount);
             morelodePool += MORELODE_INCREMENT;
         }
 
         // Mark round as resolved
         round.state = RoundState.RESOLVED;
-
-        // Mint MORE for this round (users claim via checkpoint)
-        // MORE is minted directly to vault
-        if (hasWinners) {
-            try moreToken.mint(address(vault), MORE_PER_ROUND) {
-                round.moreReward = MORE_PER_ROUND;
-            } catch {
-                round.moreReward = 0;
-            }
-        }
 
         // Start new round
         _startNewRound();
@@ -250,8 +241,26 @@ abstract contract MiningGameCore is MiningGameBase {
             winningBlock,
             round.mode,
             morelodeTriggered,
-            morelodeAmount
+            emittedMorelodeAmount
         );
+    }
+
+    function _mintRoundMore(
+        uint32 roundId,
+        uint128 morelodeAmount
+    ) internal returns (uint128 emittedMorelodeAmount) {
+        uint128 totalMoreReward = MORE_PER_ROUND + morelodeAmount;
+        Round storage round = rounds[roundId];
+
+        try moreToken.mint(address(vault), totalMoreReward) {
+            round.moreReward = totalMoreReward;
+            emittedMorelodeAmount = morelodeAmount;
+        } catch {
+            round.moreReward = 0;
+            if (morelodeAmount > 0) {
+                morelodePool += morelodeAmount;
+            }
+        }
     }
 
     /// @notice Start a new round

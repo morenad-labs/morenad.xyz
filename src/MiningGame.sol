@@ -109,20 +109,47 @@ contract MiningGame is
 
     /// @notice Set vault address (for migration only)
     /// @param _vault New vault contract address
-    /// @dev Only callable by owner. Vault must have correct controller (this proxy)
+    /// @dev Only callable by owner. Migrates balances before swapping the active vault pointer.
     function setVault(address _vault) external onlyOwner {
-        if (_vault == address(0)) revert ZeroAddress();
-        // Verify new vault's controller is this contract
-        if (IVault(_vault).controller() != address(this)) revert InvalidVaultController();
-        vault = IVault(_vault);
-        emit VaultUpdated(_vault);
+        _migrateVault(_vault);
     }
 
     /// @notice Error for invalid vault controller
     error InvalidVaultController();
+    /// @notice Error for invalid vault MORE token
+    error InvalidVaultMoreToken();
+    /// @notice Error for non-empty destination vault
+    error VaultNotEmpty();
 
     /// @notice Emitted when vault is updated
     event VaultUpdated(address indexed newVault);
+
+    /// @dev Migrate funds from current vault into a new controller-compatible vault before swapping pointers.
+    function _migrateVault(address _vault) internal {
+        if (_vault == address(0)) revert ZeroAddress();
+
+        IVault currentVault = vault;
+        IVault newVault = IVault(_vault);
+
+        if (newVault.controller() != address(this)) revert InvalidVaultController();
+        if (newVault.moreToken() != address(moreToken)) revert InvalidVaultMoreToken();
+        if (newVault.getBalance() != 0 || newVault.getMoreBalance() != 0) revert VaultNotEmpty();
+
+        uint256 nativeBalance = currentVault.getBalance();
+        if (nativeBalance != 0) {
+            currentVault.withdrawNative(_vault, nativeBalance);
+        }
+
+        uint256 moreBalance = currentVault.getMoreBalance();
+        if (moreBalance != 0) {
+            currentVault.withdrawMore(_vault, moreBalance);
+        }
+
+        if (currentVault.getBalance() != 0 || currentVault.getMoreBalance() != 0) revert VaultNotEmpty();
+
+        vault = newVault;
+        emit VaultUpdated(_vault);
+    }
 
     /// @notice Deploy on behalf of a user (only callable by AutomationManager)
     /// @param user User address to deploy for

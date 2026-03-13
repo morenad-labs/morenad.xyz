@@ -23,6 +23,7 @@ contract TreasuryStaking is Initializable, OwnableUpgradeable, UUPSUpgradeable, 
 
     uint256 private constant PRECISION = 1e18;
     uint256 private constant BURN_BPS = 9000; // 90%
+    uint256 public constant UNSTAKE_COOLDOWN = 1 days;
 
     /*//////////////////////////////////////////////////////////////
                             STATE VARIABLES
@@ -54,6 +55,9 @@ contract TreasuryStaking is Initializable, OwnableUpgradeable, UUPSUpgradeable, 
     /// @notice User rewards
     mapping(address => uint256) public rewards;
 
+    /// @notice Timestamp when a user can next unstake
+    mapping(address => uint256) public unstakeAvailableAt;
+
     /// @notice Vault contract for holding funds
     /// @dev Non-upgradeable vault with immutable controller (this proxy)
     IVault public vault;
@@ -66,8 +70,8 @@ contract TreasuryStaking is Initializable, OwnableUpgradeable, UUPSUpgradeable, 
                             STORAGE GAP
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev Reserved storage gap for future upgrades (48 slots - reduced by 2 for vault and flag)
-    uint256[48] private __gap;
+    /// @dev Reserved storage gap for future upgrades (47 slots - reduced by 3 for vault, flag, and cooldown mapping)
+    uint256[47] private __gap;
 
     /*//////////////////////////////////////////////////////////////
                                  ERRORS
@@ -79,6 +83,7 @@ contract TreasuryStaking is Initializable, OwnableUpgradeable, UUPSUpgradeable, 
     error BuybackFailed();
     error TransferFailed();
     error VaultDepositFailed();
+    error UnstakeCooldownActive(uint256 availableAt);
 
     /*//////////////////////////////////////////////////////////////
                                  EVENTS
@@ -94,6 +99,7 @@ contract TreasuryStaking is Initializable, OwnableUpgradeable, UUPSUpgradeable, 
         uint256 moreToStakers
     );
     event RewardDistributed(uint256 amount, uint256 newRewardPerToken);
+    event UnstakeCooldownUpdated(address indexed user, uint256 availableAt);
 
     /*//////////////////////////////////////////////////////////////
                                MODIFIERS
@@ -148,20 +154,47 @@ contract TreasuryStaking is Initializable, OwnableUpgradeable, UUPSUpgradeable, 
 
     /// @notice Set vault address (for migration only)
     /// @param _vault New vault contract address
-    /// @dev Only callable by owner. Vault must have correct controller (this proxy)
+    /// @dev Only callable by owner. Migrates balances before swapping the active vault pointer.
     function setVault(address _vault) external onlyOwner {
-        if (_vault == address(0)) revert ZeroAddress();
-        // Verify new vault's controller is this contract
-        if (IVault(_vault).controller() != address(this)) revert InvalidVaultController();
-        vault = IVault(_vault);
-        emit VaultUpdated(_vault);
+        _migrateVault(_vault);
     }
 
     /// @notice Error for invalid vault controller
     error InvalidVaultController();
+    /// @notice Error for invalid vault MORE token
+    error InvalidVaultMoreToken();
+    /// @notice Error for non-empty destination vault
+    error VaultNotEmpty();
 
     /// @notice Emitted when vault is updated
     event VaultUpdated(address indexed newVault);
+
+    /// @dev Migrate funds from current vault into a new controller-compatible vault before swapping pointers.
+    function _migrateVault(address _vault) internal {
+        if (_vault == address(0)) revert ZeroAddress();
+
+        IVault currentVault = vault;
+        IVault newVault = IVault(_vault);
+
+        if (newVault.controller() != address(this)) revert InvalidVaultController();
+        if (newVault.moreToken() != address(moreToken)) revert InvalidVaultMoreToken();
+        if (newVault.getBalance() != 0 || newVault.getMoreBalance() != 0) revert VaultNotEmpty();
+
+        uint256 nativeBalance = currentVault.getBalance();
+        if (nativeBalance != 0) {
+            currentVault.withdrawNative(_vault, nativeBalance);
+        }
+
+        uint256 moreBalance = currentVault.getMoreBalance();
+        if (moreBalance != 0) {
+            currentVault.withdrawMore(_vault, moreBalance);
+        }
+
+        if (currentVault.getBalance() != 0 || currentVault.getMoreBalance() != 0) revert VaultNotEmpty();
+
+        vault = newVault;
+        emit VaultUpdated(_vault);
+    }
 
     /*//////////////////////////////////////////////////////////////
                             STAKING FUNCTIONS
@@ -175,11 +208,14 @@ contract TreasuryStaking is Initializable, OwnableUpgradeable, UUPSUpgradeable, 
 
         stakedBalance[msg.sender] += amount;
         totalStaked += amount;
+        uint256 availableAt = block.timestamp + UNSTAKE_COOLDOWN;
+        unstakeAvailableAt[msg.sender] = availableAt;
 
         // Transfer MORE from user to vault
         moreToken.safeTransferFrom(msg.sender, address(vault), amount);
 
         emit Staked(msg.sender, amount);
+        emit UnstakeCooldownUpdated(msg.sender, availableAt);
     }
 
     /// @notice Withdraw staked MORE
@@ -188,6 +224,8 @@ contract TreasuryStaking is Initializable, OwnableUpgradeable, UUPSUpgradeable, 
     function withdraw(uint256 amount) external nonReentrant updateReward(msg.sender) {
         if (amount == 0) revert ZeroAmount();
         if (stakedBalance[msg.sender] < amount) revert InsufficientBalance();
+        uint256 availableAt = unstakeAvailableAt[msg.sender];
+        if (block.timestamp < availableAt) revert UnstakeCooldownActive(availableAt);
 
         stakedBalance[msg.sender] -= amount;
         totalStaked -= amount;

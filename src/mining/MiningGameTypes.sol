@@ -188,6 +188,9 @@ error InvalidAmountPerBlock();
 error TooManyBlocks();
 error VaultDepositFailed();
 error NoRoundsRemaining();
+error RoundIdOverflow();
+error NoPendingRefund();
+error ReloadAmountMismatch(uint128 reportedAmount, uint128 receivedAmount);
 
 /*//////////////////////////////////////////////////////////////
                              EVENTS
@@ -227,6 +230,7 @@ event NativeClaimed(
 event NativeWithdrawn(address indexed user, uint128 amount);
 
 event RefinedMoreDistributed(uint128 amount, uint128 newGlobalIndex);
+event RefiningFeeRolledToMorelode(uint128 amount, uint128 newMorelodePool);
 
 event ProtocolRevenueWithdrawn(address indexed treasury, uint128 amount);
 
@@ -270,6 +274,8 @@ event ExecutorFeeUpdated(uint96 oldFee, uint96 newFee);
 event RoundsAdded(address indexed authority, uint16 addedRounds, uint16 newRemainingRounds);
 
 event BatchDeployFailed(address indexed user, bytes reason);
+event AutomationRefundQueued(address indexed authority, uint128 amount, uint128 newPendingRefund);
+event PendingRefundClaimed(address indexed authority, address indexed recipient, uint128 amount);
 
 event EmergencySkip(uint32 indexed roundId);
 

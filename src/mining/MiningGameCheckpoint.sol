@@ -138,9 +138,8 @@ abstract contract MiningGameCheckpoint is MiningGameBase {
         vault.withdrawNative(msg.sender, amount);
     }
 
-    /// @notice Withdraw unclaimed MORE (pays 10% refining fee, auto-credited at round resolution)
+    /// @notice Withdraw unclaimed MORE (always pays 10% refining fee on unclaimed MORE)
     /// @dev Withdraws through vault - vault holds all MORE
-    /// @dev Last claimer is exempt from refining fee to prevent fee loss in vault
     function withdrawMore() external nonReentrant {
         // Auto-checkpoint last participated round if needed
         uint32 lastRound = lastParticipatedRound[msg.sender];
@@ -159,11 +158,7 @@ abstract contract MiningGameCheckpoint is MiningGameBase {
 
         if (unclaimed == 0 && refined == 0) revert NothingToClaim();
 
-        // Check if this is the last claimer (to avoid fee loss in vault)
-        bool isLastClaimer = (totalUnclaimedMore == unclaimed);
-
-        // Calculate refining fee on unclaimed MORE (exempt last claimer)
-        uint128 refiningFee = isLastClaimer ? 0 : uint128((uint256(unclaimed) * REFINING_FEE_BPS) / 10000);
+        uint128 refiningFee = uint128((uint256(unclaimed) * REFINING_FEE_BPS) / 10000);
         uint128 netMore = unclaimed - refiningFee;
 
         // Update state
@@ -171,10 +166,12 @@ abstract contract MiningGameCheckpoint is MiningGameBase {
         userData.accumulatedRefined = 0;
         totalUnclaimedMore -= unclaimed;
 
-        // Distribute refining fee to all other holders
-        if (refiningFee > 0 && totalUnclaimedMore > 0) {
-            globalRewardIndex += uint128((uint256(refiningFee) * PRECISION) / uint256(totalUnclaimedMore));
-            emit RefinedMoreDistributed(refiningFee, globalRewardIndex);
+        if (refiningFee > 0) {
+            if (totalUnclaimedMore > 0) {
+                _distributeRefiningFee(refiningFee, totalUnclaimedMore);
+            } else {
+                _burnUndistributableRefiningFee(refiningFee);
+            }
         }
 
         // Transfer MORE to user through vault
@@ -216,20 +213,19 @@ abstract contract MiningGameCheckpoint is MiningGameBase {
 
         // Withdraw MORE if available
         if (unclaimedMore > 0 || refinedMore > 0) {
-            // Check if this is the last claimer (to avoid fee loss in vault)
-            bool isLastClaimer = (totalUnclaimedMore == unclaimedMore);
-
-            // Calculate refining fee (exempt last claimer)
-            uint128 refiningFee = isLastClaimer ? 0 : uint128((uint256(unclaimedMore) * REFINING_FEE_BPS) / 10000);
+            uint128 refiningFee = uint128((uint256(unclaimedMore) * REFINING_FEE_BPS) / 10000);
             uint128 netMore = unclaimedMore - refiningFee;
 
             rewardData.unclaimedMore = 0;
             rewardData.accumulatedRefined = 0;
             totalUnclaimedMore -= unclaimedMore;
 
-            if (refiningFee > 0 && totalUnclaimedMore > 0) {
-                globalRewardIndex += uint128((uint256(refiningFee) * PRECISION) / uint256(totalUnclaimedMore));
-                emit RefinedMoreDistributed(refiningFee, globalRewardIndex);
+            if (refiningFee > 0) {
+                if (totalUnclaimedMore > 0) {
+                    _distributeRefiningFee(refiningFee, totalUnclaimedMore);
+                } else {
+                    _burnUndistributableRefiningFee(refiningFee);
+                }
             }
 
             uint128 totalMoreWithdraw = netMore + refinedMore;
@@ -248,5 +244,24 @@ abstract contract MiningGameCheckpoint is MiningGameBase {
 
         userData.accumulatedRefined += pending;
         userData.rewardIndex = globalRewardIndex;
+    }
+
+    function _distributeRefiningFee(uint128 refiningFee, uint128 remainingUnclaimedMore) internal {
+        uint256 increment = (uint256(refiningFee) * PRECISION) / uint256(remainingUnclaimedMore);
+        uint256 newGlobalIndex = uint256(globalRewardIndex) + increment;
+
+        // Preserve packed uint128 storage in pathological dust cases without changing reward accounting layout.
+        if (newGlobalIndex > type(uint128).max) {
+            _burnUndistributableRefiningFee(refiningFee);
+            return;
+        }
+
+        globalRewardIndex = uint128(newGlobalIndex);
+        emit RefinedMoreDistributed(refiningFee, globalRewardIndex);
+    }
+
+    function _burnUndistributableRefiningFee(uint128 refiningFee) internal {
+        vault.withdrawMore(address(this), refiningFee);
+        moreToken.burn(refiningFee);
     }
 }

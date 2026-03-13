@@ -28,11 +28,14 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
     /// @notice Protocol-level executor fee (0.03 MON for 300K gas @ 100 gwei)
     uint96 public executorFee;
 
+    /// @notice Refunds queued when an automation close cannot pay synchronously
+    mapping(address => uint128) public pendingRefunds;
+
     /*//////////////////////////////////////////////////////////////
                             STORAGE GAP
     //////////////////////////////////////////////////////////////*/
 
-    uint256[50] private __gap;
+    uint256[49] private __gap;
 
     // Errors and Events are defined in MiningGameTypes.sol
 
@@ -169,9 +172,15 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
         if (msg.sender != owner() && msg.sender != sharedExecutor) revert NotExecutor();
         for (uint256 i = 0; i < users.length; i++) {
             if (automations[users[i]].active) {
-                _closeAutomation(users[i]);
+                this.closeAutomationForBatch(users[i]);
             }
         }
+    }
+
+    /// @notice Close a single automation during a batch without aborting the entire loop on refund failure
+    function closeAutomationForBatch(address user) external {
+        if (msg.sender != address(this)) revert NotExecutor();
+        _closeAutomation(user);
     }
 
     /// @dev Internal close automation logic
@@ -186,8 +195,25 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
 
         if (refundBalance > 0) {
             (bool success, ) = user.call{value: refundBalance}("");
-            if (!success) revert TransferFailed();
+            if (!success) {
+                pendingRefunds[user] += refundBalance;
+                emit AutomationRefundQueued(user, refundBalance, pendingRefunds[user]);
+            }
         }
+    }
+
+    function claimPendingRefund(address recipient) external nonReentrant {
+        if (recipient == address(0)) revert ZeroAddress();
+
+        uint128 pendingRefund = pendingRefunds[msg.sender];
+        if (pendingRefund == 0) revert NoPendingRefund();
+
+        pendingRefunds[msg.sender] = 0;
+
+        (bool success, ) = recipient.call{value: pendingRefund}("");
+        if (!success) revert TransferFailed();
+
+        emit PendingRefundClaimed(msg.sender, recipient, pendingRefund);
     }
 
     /// @notice Deploy on behalf of a user (only callable by sharedExecutor)
@@ -277,6 +303,7 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
         if (auto_.remainingRounds == 0) revert NoRoundsRemaining();
 
         uint32 roundId = miningGame.currentRound();
+        if (roundId > type(uint24).max) revert RoundIdOverflow();
 
         // Get round state
         (uint40 startTime,, RoundState state,,,,,,,,) = miningGame.rounds(roundId);
@@ -348,11 +375,17 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
                     miningGame.checkpointFor(lastRound, user);
 
                     if (auto_.autoReload) {
-                        // Withdraw user's native rewards directly to automation balance
-                        uint128 reloadedAmount = miningGame.withdrawNativeToAutomation(user);
-                        if (reloadedAmount > 0) {
-                            auto_.balance += reloadedAmount;
-                            emit AutomationReloaded(user, reloadedAmount);
+                        uint256 balanceBefore = address(this).balance;
+                        uint128 reportedAmount = miningGame.withdrawNativeToAutomation(user);
+                        uint128 receivedAmount = uint128(address(this).balance - balanceBefore);
+
+                        if (reportedAmount != receivedAmount) {
+                            revert ReloadAmountMismatch(reportedAmount, receivedAmount);
+                        }
+
+                        if (receivedAmount > 0) {
+                            auto_.balance += receivedAmount;
+                            emit AutomationReloaded(user, receivedAmount);
                         }
                     }
                 }
@@ -430,7 +463,7 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
 
     /// @notice Check if automation can deploy
     /// @return canDeploy Whether the automation can deploy
-    /// @return reason Reason code: 0=success, 1=inactive, 2=already deployed, 3=balance insufficient, 4=round not active, 5=no rounds remaining
+    /// @return reason Reason code: 0=success, 1=inactive, 2=already deployed, 3=balance insufficient, 4=round not active, 5=no rounds remaining, 6=round id overflow
     function canAutomationDeploy(address user) public view returns (bool canDeploy, uint8 reason) {
         Automation storage auto_ = automations[user];
 
@@ -438,6 +471,7 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
         if (auto_.remainingRounds == 0) return (false, 5);
 
         uint32 roundId = miningGame.currentRound();
+        if (roundId > type(uint24).max) return (false, 6);
         if (auto_.lastDeployedRound == roundId) return (false, 2);
 
         uint8 numBlocks;
@@ -452,7 +486,9 @@ contract AutomationManager is Initializable, OwnableUpgradeable, UUPSUpgradeable
                 unchecked { ++numBlocks; }
             }
         } else {
-            numBlocks = 1;
+            numBlocks = uint8(auto_.blockMask & 0xFF);
+            if (numBlocks == 0) numBlocks = 1;
+            if (numBlocks > GRID_SIZE) numBlocks = GRID_SIZE;
         }
 
         // Check balance covers both deploy amount and executor fee

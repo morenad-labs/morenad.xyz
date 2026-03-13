@@ -90,7 +90,7 @@ abstract contract MiningGameStorage is Initializable, OwnableUpgradeable, UUPSUp
                             STORAGE GAP
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev Reserved storage gap for future upgrades (49 slots - reduced by 1 for vault)
+    /// @dev Reserved storage gap for future upgrades
     uint256[49] private __gap;
 
     /*//////////////////////////////////////////////////////////////
