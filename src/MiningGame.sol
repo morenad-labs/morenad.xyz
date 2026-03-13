@@ -133,7 +133,17 @@ contract MiningGame is
 
         if (newVault.controller() != address(this)) revert InvalidVaultController();
         if (newVault.moreToken() != address(moreToken)) revert InvalidVaultMoreToken();
-        if (newVault.getBalance() != 0 || newVault.getMoreBalance() != 0) revert VaultNotEmpty();
+
+        // Sweep any unsolicited dust from new vault back to current vault
+        // to prevent dusting DoS attacks that block migration
+        uint256 newVaultNativeBalance = newVault.getBalance();
+        if (newVaultNativeBalance != 0) {
+            newVault.withdrawNative(address(currentVault), newVaultNativeBalance);
+        }
+        uint256 newVaultMoreBalance = newVault.getMoreBalance();
+        if (newVaultMoreBalance != 0) {
+            newVault.withdrawMore(address(currentVault), newVaultMoreBalance);
+        }
 
         uint256 nativeBalance = currentVault.getBalance();
         if (nativeBalance != 0) {

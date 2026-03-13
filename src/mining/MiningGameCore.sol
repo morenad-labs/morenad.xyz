@@ -228,6 +228,9 @@ abstract contract MiningGameCore is MiningGameBase {
         if (hasWinners) {
             emittedMorelodeAmount = _mintRoundMore(roundId, morelodeAmount);
             morelodePool += MORELODE_INCREMENT;
+        } else if (morelodeAmount > 0) {
+            // Restore morelode pool when no winners received the reward
+            morelodePool = cachedMorelodePool;
         }
 
         // Mark round as resolved
@@ -309,9 +312,9 @@ abstract contract MiningGameCore is MiningGameBase {
         uint128[GRID_SIZE] storage totalDeployedForRound = totalDeployedPerBlock[roundId];
 
         uint128 totalAmount = 0;
-        uint8 length = uint8(blockIds.length);
+        uint256 length = blockIds.length;
 
-        for (uint8 i = 0; i < length;) {
+        for (uint256 i = 0; i < length;) {
             uint8 blockId = blockIds[i];
             if (blockId >= GRID_SIZE) revert InvalidBlock();
 
